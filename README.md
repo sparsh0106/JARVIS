@@ -1,56 +1,85 @@
-# 🤖 J.A.R.V.I.S — Personal AI Assistant & KV-Cache Retrieval Research
+# 🤖 J.A.R.V.I.S — Local Memory-Augmented AI & Dynamic Computer Agent
 
-A personal AI assistant project combining a modular Python assistant implementation (`jarvis_01.ipynb`) with research and architectural exploration into **Personal KV-Cache Retrieval** and on-device personal agents (`main.ipynb` and `Papers/`).
+A modular, fully local AI assistant built on **`Qwen3-4B-Instruct-2507-Q4_K_M.gguf`** (`llama-cpp-python`), **dynamic capability-oriented tool execution with deterministic policy validation**, **hybrid FAISS + TF-IDF retrieval**, **`BAAI/bge-reranker-base` Cross-Encoder reranking**, **query-aware memory selection with MMR diversity**, **Personal & Prefix KV-Cache retrieval**, and **NDJSON Streaming Responses**.
 
 ---
 
-## 📂 Repository Structure
+## 📂 Project Structure
 
 ```text
 JARVIS/
-├── Papers/
-│   ├── JUST A RATHER VERY INTELLIGENT SPOKEN AGENT.pdf
-│   ├── Jarvis: Towards Personalized AI Assistant via Personal KV-Cache Retrieval.pdf
-│   └── OpenJarvis Personal AI On Personal Devices.pdf
-├── jarvis_01.ipynb    # Modular J.A.R.V.I.S assistant prototype from scratch
-├── main.ipynb         # Study & implementation notes on Personal KV-Cache Retrieval
-└── README.md          # Project documentation
+├── Papers/                  # Reference research literature on Personal KV-Cache & on-device agents
+├── jarvis_01.ipynb          # Modular assistant exploratory prototype
+├── jarvis_02.ipynb          # Secondary development notebook
+├── main.ipynb               # Research notes on Personal KV-Cache retrieval
+├── run_jarvis.py            # CLI entry point (--demo, --eval, --ir-only, --serve, or interactive)
+├── requirements.txt         # Runtime Python dependencies
+├── jarvis/
+│   ├── __init__.py          # Public package exports
+│   ├── __main__.py          # Entry point for `python -m jarvis`
+│   ├── config.py            # Typed configuration (MemoryConfig, LLMConfig, AgentConfig)
+│   ├── llm.py               # LLMBackend + Qwen3-4B GGUF loader, KV-cache & streaming telemetry
+│   ├── kv_memory.py         # Personal KV-Cache & longest-common-prefix LRU tracker
+│   ├── memory.py            # Hybrid FAISSMemoryStore (IndexIDMap2.reconstruct, TF-IDF, Cross-Encoder, MMR)
+│   ├── tools.py             # Capability ToolRegistry (execute_command, filesystem, desktop, memory, calculate) & CommandPolicyValidator
+│   ├── extractor.py         # Non-greedy raw_decode JSON parser & user-only durable memory extractor
+│   ├── agent.py             # Proactive memory injection + bounded tool/repair loop + streaming final synthesis
+│   ├── eval_benchmark.py    # 25-query IR benchmark, dynamic capability tool policy checks, & E2E verification
+│   ├── cli.py               # Interactive terminal UI (incremental token streaming), demo, & server launcher
+│   └── api/
+│       ├── __init__.py      # API package exports
+│       ├── llm_service.py   # Raw LLM service (`POST /api/chat` with `stream=true` NDJSON & `stream=false` JSON)
+│       └── server.py        # Unified FastAPI app (`/health`, `/api/chat`, `/api/jarvis/stream`)
 ```
 
 ---
 
-## 🧠 Core Components
+## 🛠️ Capability Tool Interface & Security Policy
 
-### 1. `jarvis_01.ipynb` — Modular Assistant Prototype
-Builds a foundational J.A.R.V.I.S engine from scratch in Python before scaling to research-grade LLM architectures:
-- **Conversational Output & Formatting**: Structured response interface (`jarvis_speak`) for assistant interaction.
-- **System & Environment Telemetry**: Platform inspection, local time/date utilities, file system navigation, and subprocess command execution.
-- **Extensible Skill Routing**: Designed to bridge deterministic local utilities with LLM-backed reasoning.
+Instead of one hard-coded tool per hardware metric or shell command, `ToolRegistry` exposes a small, capability-oriented interface validated by `CommandPolicyValidator`:
 
-### 2. `main.ipynb` — Personal KV-Cache Retrieval Architecture
-Investigates the architecture proposed in *Jarvis: Towards Personalized AI Assistant via Personal KV-Cache Retrieval*:
-- **Memory & Identity Layer**: Instead of repeatedly injecting long personal histories into the text prompt, personal evidence is encoded into reusable **Key-Value (KV) cache states**.
-- **Selective State Attachment**: Retrieves only the relevant KV-cache blocks at inference time and attaches them directly to the frozen base language model, reducing prefill latency and context bloat.
+| Tool | Scope |
+|---|---|
+| `execute_command` | Runs a structured `executable` + `args` list with `shell=False`, sanitized environment variables, workspace `cwd` confinement, output truncation, and timeout bounds (`nvidia-smi`, `df`, `free`, `ps`, `lscpu`, `date`, `git`, `python3`/`pytest`, `ros2`). |
+| `filesystem` | Workspace-scoped `list`, `search`, `read`, `write`, `edit`, `mkdir`, `copy`, `move`, and `delete` operations verified against configured `workspace_roots`. |
+| `desktop` | Approved desktop operations (`open_app`, `list_apps`, `screenshot`). |
+| `memory` | Unified `remember`, `search`, `update`, `forget`, and `list` operations backed by `FAISSMemoryStore`. |
+| `calculate` | Bounded deterministic AST calculator with power-tower DoS protection. |
 
-### 3. `Papers/` — Reference Literature
-- **Jarvis: Towards Personalized AI Assistant via Personal KV-Cache Retrieval** — Personal memory representation via KV-cache states.
-- **OpenJarvis: Personal AI On Personal Devices** — On-device personal AI assistant systems and local execution workflows.
-- **Just A Rather Very Intelligent Spoken Agent** — Spoken dialogue and voice-first agent design.
+### Permission Levels
+- **Read-only**: Hardware/system inspection (`nvidia-smi`, `ps`, `df`, `free`, `date`, `git status`, `ros2 topic list`) runs automatically after policy validation.
+- **Reversible**: Workspace file creation/movement or `git add`/`branch` runs within approved workspace roots.
+- **Destructive**: File deletion (`rm`, `filesystem delete`), `git reset`, package installation, and ROS 2 actuation (`ros2 topic pub`) require explicit confirmation (`confirm=True`).
+- **Denied**: Privilege escalation (`sudo`, `su`), unrestricted shells (`bash -c`, `sh -c`), inline code execution (`python -c`), command chaining/injection, and path traversal outside `workspace_roots` are rejected deterministically.
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Quick Start
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/sparsh0106/JARVIS.git
-   cd JARVIS
-   ```
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
 
-2. **Launch Jupyter Notebook**:
-   ```bash
-   jupyter notebook jarvis_01.ipynb
-   ```
+# 2. Launch interactive JARVIS terminal chat (streams tokens in real time)
+python run_jarvis.py
+
+# 3. Run the automated multi-turn demonstration
+python run_jarvis.py --demo
+
+# 4. Run the 25-query IR benchmark + capability tool policy & E2E verification suite
+python run_jarvis.py --eval
+
+# 5. Start the FastAPI Streaming Server (http://127.0.0.1:8000)
+python run_jarvis.py --serve --host 127.0.0.1 --port 8000
+```
+
+---
+
+## 📚 Reference Literature (`Papers/`)
+
+- **Jarvis: Towards Personalized AI Assistant via Personal KV-Cache Retrieval** — Personal memory representation via KV-cache states.
+- **OpenJarvis: Personal AI On Personal Devices** — On-device personal AI assistant systems and local execution workflows.
+- **Just A Rather Very Intelligent Spoken Agent** — Spoken dialogue and voice-first agent design.
 
 ---
 
