@@ -8,10 +8,6 @@ A modular, fully local AI assistant built on **`Qwen3-4B-Instruct-2507-Q4_K_M.gg
 
 ```text
 JARVIS/
-├── Papers/                  # Reference research literature on Personal KV-Cache & on-device agents
-├── jarvis_01.ipynb          # Modular assistant exploratory prototype
-├── jarvis_02.ipynb          # Secondary development notebook
-├── main.ipynb               # Research notes on Personal KV-Cache retrieval
 ├── run_jarvis.py            # CLI entry point (--demo, --eval, --ir-only, --serve, or interactive)
 ├── requirements.txt         # Runtime Python dependencies
 ├── jarvis/
@@ -72,14 +68,6 @@ python run_jarvis.py --eval
 # 5. Start the FastAPI Streaming Server (http://127.0.0.1:8000)
 python run_jarvis.py --serve --host 127.0.0.1 --port 8000
 ```
-
----
-
-## 📚 Reference Literature (`Papers/`)
-
-- **Jarvis: Towards Personalized AI Assistant via Personal KV-Cache Retrieval** — Personal memory representation via KV-cache states.
-- **OpenJarvis: Personal AI On Personal Devices** — On-device personal AI assistant systems and local execution workflows.
-- **Just A Rather Very Intelligent Spoken Agent** — Spoken dialogue and voice-first agent design.
 
 ---
 
