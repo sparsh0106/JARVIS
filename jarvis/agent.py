@@ -1,15 +1,13 @@
-"""Core JARVIS Agent Loop with Synchronous & Streaming Execution, Query-Aware Memory, Capability Tools, and Bounded Repair."""
+"""Core JARVIS Agent Loop with Real-Time Token Streaming, Query-Aware Memory, Capability Tools, and Bounded Repair."""
 
 from __future__ import annotations
 
 import json
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
-
-from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 
 from .config import JarvisConfig
 from .extractor import extract_json_object, extract_memories_from_user_turn
@@ -119,7 +117,7 @@ class TurnContext:
 
 
 class JarvisAgent:
-    """Orchestrates query-aware memory retrieval, KV-cached LLM generation, capability tool execution, and streaming."""
+    """Orchestrates query-aware memory retrieval, KV-cached LLM generation, capability tools, and token streaming."""
 
     def __init__(
         self,
@@ -405,7 +403,6 @@ class JarvisAgent:
                     "query_plan": ctx.query_plan,
                 }
 
-            # Enforce bounded repair / policy stop if the model ignores the stop instruction
             if stop_tool_calls and last_failed_result is not None:
                 answer = self._format_failure_fallback(last_failed_result)
                 history.extend(
@@ -471,7 +468,7 @@ class JarvisAgent:
         user_text: str,
         history: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
-        """Execute a complete non-streaming user turn (retains full backward compatibility)."""
+        """Execute a complete non-streaming user turn returning full answers, memories, and stats."""
         if history is None:
             history = []
 
@@ -490,7 +487,7 @@ class JarvisAgent:
             "kv_cache_stats": self.llm_engine.kv_manager.stats(),
         }
 
-    def stream_turn_sync(
+    def stream_turn(
         self,
         user_text: str,
         history: Optional[List[Dict[str, str]]] = None,
@@ -498,9 +495,8 @@ class JarvisAgent:
         request_id: Optional[str] = None,
     ) -> Iterator[Dict[str, Any]]:
         """
-        Synchronous streaming agent turn yielding structured application events:
-        `start` -> `status` -> (`tool_start` -> `tool_result`)* -> `token`+ -> `final` -> `done`.
-        Never leaks raw JSON routing objects as user-facing text.
+        Streaming agent turn yielding tool execution status and incremental word-by-word token deltas:
+        `start` -> `status` -> (`tool_start` -> `tool_result`)* -> `token` (word by word) -> `final` -> `done`.
         """
         if history is None:
             history = []
@@ -532,7 +528,7 @@ class JarvisAgent:
             stop_tool_calls = False
             last_failed_result: Optional[Dict[str, Any]] = None
 
-            # Stage 1: Validated non-streaming JSON action & bounded tool repair loop
+            # Stage 1: Validated JSON action & bounded tool repair loop
             for _ in range(rounds):
                 raw = self.llm_engine.generate_chat(
                     messages,
@@ -634,7 +630,7 @@ class JarvisAgent:
                     yield {"event": "done"}
                     return
 
-            # Stage 2: User-facing incremental natural-language streaming
+            # Stage 2: Incremental word-by-word streaming of the natural-language response
             final_sys_prompt = build_streaming_system_prompt(
                 retrieved_memories=ctx.retrieved_memories,
                 tool_trace=tool_trace,
@@ -656,6 +652,7 @@ class JarvisAgent:
             ):
                 if text_delta:
                     collected_chunks.append(text_delta)
+                    # Yield each word/token delta directly as it arrives from the LLM
                     yield {"event": "token", "text": text_delta}
 
             full_answer = "".join(collected_chunks).strip()
@@ -663,7 +660,7 @@ class JarvisAgent:
                 full_answer = draft_answer
                 yield {"event": "token", "text": full_answer}
 
-            # Stage 3: Update conversation history once and persist extracted user memories
+            # Stage 3: Record history and persist extracted user facts
             history.extend(
                 [
                     {"role": "user", "content": user_text},
@@ -693,33 +690,3 @@ class JarvisAgent:
                 "message": "The model could not complete this response.",
             }
             yield {"event": "done"}
-
-    async def stream_turn(
-        self,
-        user_text: str,
-        history: Optional[List[Dict[str, str]]] = None,
-        max_tool_rounds: Optional[int] = None,
-        request_id: Optional[str] = None,
-    ) -> AsyncIterator[Dict[str, Any]]:
-        """
-        Asynchronous streaming agent turn for FastAPI (`POST /api/jarvis/stream`).
-        Serializes model usage via `llm_engine.generation_lock` and offloads blocking
-        inference/tool steps from the ASGI event loop using `iterate_in_threadpool`.
-        """
-        async with self.llm_engine.generation_lock:
-            sync_gen = self.stream_turn_sync(
-                user_text=user_text,
-                history=history,
-                max_tool_rounds=max_tool_rounds,
-                request_id=request_id,
-            )
-            try:
-                async for event in iterate_in_threadpool(sync_gen):
-                    yield event
-            finally:
-                close = getattr(sync_gen, "close", None)
-                if callable(close):
-                    try:
-                        await run_in_threadpool(close)
-                    except Exception:
-                        pass

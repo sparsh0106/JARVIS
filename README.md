@@ -1,6 +1,6 @@
 # 🤖 J.A.R.V.I.S — Local Memory-Augmented AI & Dynamic Computer Agent
 
-A modular, fully local AI assistant built on **`Qwen3-4B-Instruct-2507-Q4_K_M.gguf`** (`llama-cpp-python`), **dynamic capability-oriented tool execution with deterministic policy validation**, **hybrid FAISS + TF-IDF retrieval**, **`BAAI/bge-reranker-base` Cross-Encoder reranking**, **query-aware memory selection with MMR diversity**, **Personal & Prefix KV-Cache retrieval**, and **NDJSON Streaming Responses**.
+A modular, fully local AI assistant built on **`Qwen3-4B-Instruct-2507-Q4_K_M.gguf`** (`llama-cpp-python`), **dynamic capability-oriented tool execution with deterministic policy validation**, **hybrid FAISS + TF-IDF retrieval**, **`BAAI/bge-reranker-base` Cross-Encoder reranking**, **query-aware memory selection with MMR diversity**, **Personal & Prefix KV-Cache retrieval**, and **real-time word-by-word streaming generation**.
 
 ---
 
@@ -8,24 +8,20 @@ A modular, fully local AI assistant built on **`Qwen3-4B-Instruct-2507-Q4_K_M.gg
 
 ```text
 JARVIS/
-├── run_jarvis.py            # CLI entry point (--demo, --eval, --ir-only, --serve, or interactive)
-├── requirements.txt         # Runtime Python dependencies
+├── run_jarvis.py            # CLI entry point (--demo, --eval, --ir-only, or interactive)
+├── requirements.txt         # Lightweight runtime Python dependencies
 ├── jarvis/
 │   ├── __init__.py          # Public package exports
 │   ├── __main__.py          # Entry point for `python -m jarvis`
 │   ├── config.py            # Typed configuration (MemoryConfig, LLMConfig, AgentConfig)
-│   ├── llm.py               # LLMBackend + Qwen3-4B GGUF loader, KV-cache & streaming telemetry
+│   ├── llm.py               # LLMBackend + Qwen3-4B GGUF loader, KV-cache & real-time token streaming
 │   ├── kv_memory.py         # Personal KV-Cache & longest-common-prefix LRU tracker
 │   ├── memory.py            # Hybrid FAISSMemoryStore (IndexIDMap2.reconstruct, TF-IDF, Cross-Encoder, MMR)
 │   ├── tools.py             # Capability ToolRegistry (execute_command, filesystem, desktop, memory, calculate) & CommandPolicyValidator
 │   ├── extractor.py         # Non-greedy raw_decode JSON parser & user-only durable memory extractor
-│   ├── agent.py             # Proactive memory injection + bounded tool/repair loop + streaming final synthesis
+│   ├── agent.py             # Proactive memory injection + bounded tool loop + token-by-token streaming
 │   ├── eval_benchmark.py    # 25-query IR benchmark, dynamic capability tool policy checks, & E2E verification
-│   ├── cli.py               # Interactive terminal UI (incremental token streaming), demo, & server launcher
-│   └── api/
-│       ├── __init__.py      # API package exports
-│       ├── llm_service.py   # Raw LLM service (`POST /api/chat` with `stream=true` NDJSON & `stream=false` JSON)
-│       └── server.py        # Unified FastAPI app (`/health`, `/api/chat`, `/api/jarvis/stream`)
+│   └── cli.py               # Interactive terminal UI (incremental word-by-word streaming), demo, & benchmark runner
 ```
 
 ---
@@ -56,7 +52,7 @@ Instead of one hard-coded tool per hardware metric or shell command, `ToolRegist
 # 1. Install dependencies
 pip install -r requirements.txt
 
-# 2. Launch interactive JARVIS terminal chat (streams tokens in real time)
+# 2. Launch interactive JARVIS terminal chat (streams words/tokens in real time)
 python run_jarvis.py
 
 # 3. Run the automated multi-turn demonstration
@@ -64,9 +60,6 @@ python run_jarvis.py --demo
 
 # 4. Run the 25-query IR benchmark + capability tool policy & E2E verification suite
 python run_jarvis.py --eval
-
-# 5. Start the FastAPI Streaming Server (http://127.0.0.1:8000)
-python run_jarvis.py --serve --host 127.0.0.1 --port 8000
 ```
 
 ---

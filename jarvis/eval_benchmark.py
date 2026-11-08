@@ -7,11 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import HTTPException
-
 from .agent import JarvisAgent, build_system_prompt
-from .api.llm_service import LocalLLMService
-from .api.server import _validate_agent_stream_payload
 from .config import JarvisConfig, MemoryConfig
 from .extractor import (
     MEMORY_SYSTEM_PROMPT,
@@ -72,64 +68,6 @@ NEGATIVE_EVAL_QUERIES: List[str] = [
     "Hello!",
     "999 * 123 + 45",
 ]
-
-
-def _verify_api_payload_validation() -> bool:
-    """Verify FastAPI payload validation rules (HTTP 400 and 422 checks)."""
-    svc = LocalLLMService(max_tokens_limit=2048)
-
-    # 1. Non-object body -> 400
-    try:
-        svc._validate_payload(["not", "a", "dict"])
-        return False
-    except HTTPException as exc:
-        if exc.status_code != 400:
-            return False
-
-    # 2. Missing messages -> 422
-    try:
-        svc._validate_payload({"stream": True})
-        return False
-    except HTTPException as exc:
-        if exc.status_code != 422:
-            return False
-
-    # 3. Invalid stream type -> 422
-    try:
-        svc._validate_payload(
-            {"messages": [{"role": "user", "content": "Hi"}], "stream": "yes"}
-        )
-        return False
-    except HTTPException as exc:
-        if exc.status_code != 422:
-            return False
-
-    # 4. Out-of-bounds max_tokens -> 422
-    try:
-        svc._validate_payload(
-            {"messages": [{"role": "user", "content": "Hi"}], "max_tokens": 9999}
-        )
-        return False
-    except HTTPException as exc:
-        if exc.status_code != 422:
-            return False
-
-    # 5. Valid payload strips client 'model' field
-    cleaned = svc._validate_payload(
-        {
-            "model": "/etc/passwd",
-            "messages": [{"role": "user", "content": "Hello"}],
-            "stream": True,
-        }
-    )
-    if "model" in cleaned or cleaned.get("stream") is not True:
-        return False
-
-    # 6. Agent stream payload validation
-    agent_params = _validate_agent_stream_payload(
-        {"user_text": "What is my age?", "history": []}
-    )
-    return agent_params["user_text"] == "What is my age?"
 
 
 def _verify_dynamic_capability_tools(store: FAISSMemoryStore, tmp_dir: Path) -> Dict[str, bool]:
@@ -336,7 +274,7 @@ def run_ir_benchmark(
 
 
 def run_full_verification(run_llm_e2e: bool = True) -> Dict[str, Any]:
-    """Run deterministic unit checks for all capability tools, memory retrieval, and live LLM streaming."""
+    """Run deterministic unit checks for all capability tools, memory retrieval, and live LLM word-by-word streaming."""
     checks: Dict[str, Any] = {}
 
     # 1. Prompt newline verification (no literal "\\n")
@@ -372,10 +310,7 @@ def run_full_verification(run_llm_e2e: bool = True) -> Dict[str, Any]:
         "My name is Sparsh Agarwal and I am building a ROS 2 robot."
     )
 
-    # 5. FastAPI Streaming Payload Validation Checks (400 / 422 / model stripping)
-    checks["api_payload_validation_ok"] = _verify_api_payload_validation()
-
-    # 6. Dynamic Capability Tools + IR Benchmark + Singleton Supersede + Reset verification
+    # 5. Dynamic Capability Tools + IR Benchmark + Singleton Supersede + Reset verification
     with tempfile.TemporaryDirectory(prefix="jarvis_verify_") as tmp_dir:
         tmp_path = Path(tmp_dir)
         cfg = MemoryConfig(base_dir=tmp_path / "mem", use_cross_encoder=True)
@@ -466,9 +401,9 @@ def run_full_verification(run_llm_e2e: bool = True) -> Dict[str, Any]:
             checks["e2e_turn_calc_answer"] = t_calc["answer"]
             checks["e2e_turn_calc_correct"] = "4736" in t_calc["answer"]
 
-            # 7. Verify Agent Streaming (`stream_turn_sync`) events, no JSON leak, and TTFT telemetry
+            # Verify Agent Word-by-Word Streaming (`stream_turn`) events, no JSON leak, and TTFT telemetry
             stream_events = list(
-                agent.stream_turn_sync(
+                agent.stream_turn(
                     "What is my name and what am I building?", history=history
                 )
             )

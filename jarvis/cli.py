@@ -1,4 +1,4 @@
-"""Interactive CLI, FastAPI Server Launcher, and Diagnostic/Benchmark Runner for JARVIS v2."""
+"""Interactive CLI, Automated Demo, and Diagnostic/Benchmark Runner for JARVIS v2."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from .eval_benchmark import run_full_verification, run_ir_benchmark
 
 
 def run_demo(memory_dir: str = "jarvis_data/demo_memory") -> None:
-    """Run an automated multi-turn demonstration verifying streaming and non-streaming components."""
+    """Run an automated multi-turn demonstration with real-time token streaming."""
     cfg = JarvisConfig(memory=MemoryConfig(base_dir=Path(memory_dir)))
     agent = JarvisAgent(config=cfg)
     agent.memory_store.reset()
@@ -42,7 +42,7 @@ def run_demo(memory_dir: str = "jarvis_data/demo_memory") -> None:
         new_memories: List[Dict] = []
         metrics: Dict = {}
 
-        for event in agent.stream_turn_sync(prompt, history=history):
+        for event in agent.stream_turn(prompt, history=history):
             ev_type = event.get("event")
             if ev_type == "tool_start":
                 tools_used.append(event["tool_name"])
@@ -81,7 +81,7 @@ def run_demo(memory_dir: str = "jarvis_data/demo_memory") -> None:
 def run_interactive(
     memory_dir: str = "jarvis_data/memory", stream_output: bool = True
 ) -> None:
-    """Start an interactive terminal session with incremental token streaming."""
+    """Start an interactive terminal session with word-by-word token streaming."""
     cfg = JarvisConfig(memory=MemoryConfig(base_dir=Path(memory_dir)))
     agent = JarvisAgent(config=cfg)
     history: List[Dict[str, str]] = []
@@ -140,11 +140,12 @@ def run_interactive(
                 continue
 
             print("JARVIS: ", end="", flush=True)
-            for event in agent.stream_turn_sync(user_input, history=history):
+            for event in agent.stream_turn(user_input, history=history):
                 ev_type = event.get("event")
                 if ev_type == "tool_start":
-                    print(f"[calling {event['tool_name']}...] ", end="", flush=True)
+                    print(f"[{event['tool_name']}...] ", end="", flush=True)
                 elif ev_type == "token":
+                    # Prints each token/word immediately as generated
                     print(event["text"], end="", flush=True)
                 elif ev_type == "error":
                     print(f"\n[Error: {event.get('message')}]", end="", flush=True)
@@ -172,23 +173,6 @@ def main() -> None:
         help="Run only the fast 25-query IR benchmark (without loading the LLM).",
     )
     parser.add_argument(
-        "--serve",
-        action="store_true",
-        help="Start the local FastAPI NDJSON streaming server (127.0.0.1:8000).",
-    )
-    parser.add_argument(
-        "--host",
-        type=str,
-        default="127.0.0.1",
-        help="Bind host for --serve (default: 127.0.0.1).",
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=8000,
-        help="Bind port for --serve (default: 8000).",
-    )
-    parser.add_argument(
         "--no-stream",
         action="store_true",
         help="Disable incremental token streaming in interactive CLI mode.",
@@ -209,15 +193,6 @@ def main() -> None:
         print(json.dumps(res, indent=2))
     elif args.demo:
         run_demo()
-    elif args.serve:
-        import uvicorn
-
-        uvicorn.run(
-            "jarvis.api.server:app",
-            host=args.host,
-            port=args.port,
-            workers=1,
-        )
     else:
         run_interactive(
             memory_dir=args.memory_dir, stream_output=not args.no_stream
