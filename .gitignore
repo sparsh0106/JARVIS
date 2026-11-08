@@ -2,26 +2,78 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# C extensions & Packaging
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.exe
+*.spec
 
-# Environments
+# Virtual environments
 .env
 .venv
 env/
 venv/
+ENV/
+env.bak/
+venv.bak/
 
-# Build / packaging
-build/
-dist/
-*.exe
-*.spec
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
 
 # Gradio / Streamlit
 .gradio/
 .streamlit/secrets.toml
 
-# OS files
+# Local runtime data, FAISS indices, and temporary memory stores
+jarvis_data/
+jarvis_memory/
+*.faiss
+*.pkl
+*.db
+*.sqlite3
+
+# Audio / voice test recordings and outputs
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.m4a
+
+# Large model weights and checkpoints
+*.gguf
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.onnx
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
 Thumbs.db
+
+# Logs and screenshots
+*.log
+screenshot*.png

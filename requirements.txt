@@ -1,0 +1,14 @@
+# Core LLM Engine & Quantized Inference
+llama-cpp-python>=0.3.0
+
+# Memory & Embeddings
+sentence-transformers>=2.2.0
+faiss-cpu>=1.7.4
+scikit-learn>=1.3.0
+numpy>=1.24.0
+torch>=2.0.0
+
+# API Server & Streaming
+fastapi>=0.100.0
+uvicorn>=0.23.0
+starlette>=0.27.0
