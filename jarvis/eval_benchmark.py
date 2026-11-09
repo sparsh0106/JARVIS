@@ -75,59 +75,41 @@ def _verify_dynamic_capability_tools(store: FAISSMemoryStore, tmp_dir: Path) -> 
     ws = tmp_dir / "workspace"
     ws.mkdir(parents=True, exist_ok=True)
     tools = ToolRegistry(
-        memory_store=store,
-        workspace_root=ws,
-        allow_app_launch=False,
-        require_confirmation_for_destructive=True,
+        memory_store=store, workspace_root=ws,
+        allow_app_launch=False, require_confirmation_for_destructive=True,
     )
-
-    results: Dict[str, bool] = {}
 
     # 1. Capability tool set migration check
-    expected_tools = {"execute_command", "filesystem", "desktop", "memory", "calculate"}
-    results["capability_tool_set_exact"] = tools.tool_names == expected_tools
+    cap_set_ok = tools.tool_names == {"execute_command", "filesystem", "desktop", "memory", "calculate"}
 
     # 2. Read-only system commands execute automatically
-    uname_res = tools.execute("execute_command", {"executable": "uname", "args": ["-s"]})
-    date_res = tools.execute("execute_command", {"executable": "date", "args": []})
-    py_res = tools.execute("execute_command", {"executable": "python3", "args": ["--version"]})
-    results["readonly_commands_succeed"] = (
-        bool(uname_res.get("ok"))
-        and bool(date_res.get("ok"))
-        and bool(py_res.get("ok"))
-        and len(uname_res.get("stdout", "")) > 0
-    )
+    u_res = tools.execute("execute_command", {"executable": "uname", "args": ["-s"]})
+    d_res = tools.execute("execute_command", {"executable": "date", "args": []})
+    p_res = tools.execute("execute_command", {"executable": "python3", "args": ["--version"]})
+    ro_ok = bool(u_res.get("ok")) and bool(d_res.get("ok")) and bool(p_res.get("ok")) and len(u_res.get("stdout", "")) > 0
 
     # 3. Reject unknown executables, shells, privilege escalation, inline python, and shell injection
-    unknown_res = tools.execute("execute_command", {"executable": "nonexistent_malicious_bin", "args": []})
-    sudo_res = tools.execute("execute_command", {"executable": "sudo", "args": ["ls"]})
-    bash_res = tools.execute("execute_command", {"executable": "bash", "args": ["-c", "echo pwned"]})
-    pyc_res = tools.execute("execute_command", {"executable": "python3", "args": ["-c", "import os"]})
-    inj_res = tools.execute("execute_command", {"executable": "df", "args": ["-h; rm -rf /"]})
-    trav_cmd_res = tools.execute("execute_command", {"executable": "cat", "args": ["/etc/passwd"]})
-    results["security_policy_rejects_unapproved"] = all(
-        r.get("ok") is False and r.get("status") == "denied"
-        for r in (unknown_res, sudo_res, bash_res, pyc_res, inj_res, trav_cmd_res)
-    )
+    denied_checks = [
+        tools.execute("execute_command", {"executable": "nonexistent_malicious_bin", "args": []}),
+        tools.execute("execute_command", {"executable": "sudo", "args": ["ls"]}),
+        tools.execute("execute_command", {"executable": "bash", "args": ["-c", "echo pwned"]}),
+        tools.execute("execute_command", {"executable": "python3", "args": ["-c", "import os"]}),
+        tools.execute("execute_command", {"executable": "df", "args": ["-h; rm -rf /"]}),
+        tools.execute("execute_command", {"executable": "cat", "args": ["/etc/passwd"]}),
+    ]
+    sec_ok = all(r.get("ok") is False and r.get("status") == "denied" for r in denied_checks)
 
     # 4. Destructive commands require explicit confirmation
-    rm_unconfirmed = tools.execute("execute_command", {"executable": "rm", "args": ["test.txt"]})
-    git_reset = tools.execute("execute_command", {"executable": "git", "args": ["reset", "--hard"]})
-    ros_pub = tools.execute("execute_command", {"executable": "ros2", "args": ["topic", "pub", "/cmd_vel", "geometry_msgs/msg/Twist"]})
-    results["destructive_commands_require_confirmation"] = all(
-        r.get("ok") is False
-        and r.get("status") == "confirmation_required"
-        and r.get("requires_confirmation") is True
-        for r in (rm_unconfirmed, git_reset, ros_pub)
-    )
+    confirm_checks = [
+        tools.execute("execute_command", {"executable": "rm", "args": ["test.txt"]}),
+        tools.execute("execute_command", {"executable": "git", "args": ["reset", "--hard"]}),
+        tools.execute("execute_command", {"executable": "ros2", "args": ["topic", "pub", "/cmd_vel", "geometry_msgs/msg/Twist"]}),
+    ]
+    dest_ok = all(r.get("ok") is False and r.get("status") == "confirmation_required" and r.get("requires_confirmation") is True for r in confirm_checks)
 
     # 5. Non-zero exit codes are accurately reported as failed (never ok=True)
     fail_ls = tools.execute("execute_command", {"executable": "ls", "args": ["nonexistent_file_xyz.txt"]})
-    results["nonzero_exit_code_reported_failed"] = (
-        fail_ls.get("ok") is False
-        and fail_ls.get("status") == "failed"
-        and fail_ls.get("exit_code") != 0
-    )
+    nz_ok = fail_ls.get("ok") is False and fail_ls.get("status") == "failed" and fail_ls.get("exit_code") != 0
 
     # 6. Filesystem capability operations and path traversal defense
     w_res = tools.execute("filesystem", {"operation": "write", "path": "notes/todo.txt", "content": "hello world\nline two"})
@@ -137,36 +119,34 @@ def _verify_dynamic_capability_tools(store: FAISSMemoryStore, tmp_dir: Path) -> 
     s_res = tools.execute("filesystem", {"operation": "search", "path": ".", "pattern": "*.txt"})
     del_unconfirmed = tools.execute("filesystem", {"operation": "delete", "path": "notes/todo.txt"})
     del_confirmed = tools.execute("filesystem", {"operation": "delete", "path": "notes/todo.txt", "confirm": True})
-    escape_res = tools.execute("filesystem", {"operation": "read", "path": "../../etc/passwd"})
-
-    results["filesystem_operations_and_isolation_ok"] = (
-        bool(w_res.get("ok"))
-        and "hello world" in r_res.get("content", "")
-        and bool(e_res.get("ok"))
-        and "hello jarvis" in r2_res.get("content", "")
-        and "notes/todo.txt" in s_res.get("matches", [])
-        and del_unconfirmed.get("status") == "confirmation_required"
-        and bool(del_confirmed.get("ok"))
-        and escape_res.get("status") == "denied"
+    esc_res = tools.execute("filesystem", {"operation": "read", "path": "../../etc/passwd"})
+    fs_ok = (
+        bool(w_res.get("ok")) and "hello world" in r_res.get("content", "") and bool(e_res.get("ok"))
+        and "hello jarvis" in r2_res.get("content", "") and "notes/todo.txt" in s_res.get("matches", [])
+        and del_unconfirmed.get("status") == "confirmation_required" and bool(del_confirmed.get("ok"))
+        and esc_res.get("status") == "denied"
     )
 
     # 7. Consolidated memory capability tool
     m_rem = tools.execute("memory", {"operation": "remember", "text": "The user prefers Arch Linux.", "memory_type": "preference", "importance": 0.85})
     m_srch = tools.execute("memory", {"operation": "search", "query": "Which Linux distro does the user prefer?"})
-    results["consolidated_memory_tool_ok"] = (
-        bool(m_rem.get("ok"))
-        and bool(m_srch.get("ok"))
-        and "Arch Linux" in m_srch.get("results", "")
-    )
+    mem_ok = bool(m_rem.get("ok")) and bool(m_srch.get("ok")) and "Arch Linux" in m_srch.get("results", "")
 
     # 8. Desktop capability tool (dry-run & unapproved rejection)
     d_open = tools.execute("desktop", {"operation": "open_app", "app_name": "calculator"})
     d_bad = tools.execute("desktop", {"operation": "open_app", "app_name": "evil_miner"})
-    results["desktop_tool_ok"] = (
-        bool(d_open.get("ok")) and d_bad.get("status") == "denied"
-    )
+    dt_ok = bool(d_open.get("ok")) and d_bad.get("status") == "denied"
 
-    return results
+    return {
+        "capability_tool_set_exact": cap_set_ok,
+        "readonly_commands_succeed": ro_ok,
+        "security_policy_rejects_unapproved": sec_ok,
+        "destructive_commands_require_confirmation": dest_ok,
+        "nonzero_exit_code_reported_failed": nz_ok,
+        "filesystem_operations_and_isolation_ok": fs_ok,
+        "consolidated_memory_tool_ok": mem_ok,
+        "desktop_tool_ok": dt_ok,
+    }
 
 
 def run_ir_benchmark(
@@ -174,48 +154,24 @@ def run_ir_benchmark(
     reranker: Any = None,
     device: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Evaluate Recall@1, Recall@3, MRR, and Negative Query Rejection across the 25-query benchmark,
-    comparing Hybrid (Bi-Encoder + RRF) vs Hybrid + Cross-Encoder Reranking.
-    """
+    """Evaluate Recall@1, Recall@3, MRR, and Negative Query Rejection across the 25-query benchmark."""
     with tempfile.TemporaryDirectory(prefix="jarvis_ir_bench_") as tmp_dir:
-        cfg = MemoryConfig(
-            base_dir=Path(tmp_dir),
-            use_cross_encoder=True,
-            duplicate_threshold=0.95,
-        )
-        store = FAISSMemoryStore(
-            config=cfg, embedder=embedder, reranker=reranker, device=device
-        )
+        cfg = MemoryConfig(base_dir=Path(tmp_dir), use_cross_encoder=True, duplicate_threshold=0.95)
+        store = FAISSMemoryStore(config=cfg, embedder=embedder, reranker=reranker, device=device)
 
         for text, mtype, imp in BENCHMARK_CORPUS:
-            store.add(
-                text=text,
-                memory_type=mtype,
-                importance=imp,
-                source="benchmark_seed",
-            )
+            store.add(text=text, memory_type=mtype, importance=imp, source="benchmark_seed")
 
-        modes = {
-            "hybrid_biencoder_only": False,
-            "hybrid_plus_cross_encoder": True,
-        }
+        modes = {"hybrid_biencoder_only": False, "hybrid_plus_cross_encoder": True}
         report: Dict[str, Any] = {}
+        n_pos = len(POSITIVE_EVAL_QUERIES)
 
         for mode_name, use_ce in modes.items():
-            hits_at_1 = 0
-            hits_at_3 = 0
-            rr_sum = 0.0
-
+            hits_at_1, hits_at_3, rr_sum = 0, 0, 0.0
             for query, expected_id, mtype in POSITIVE_EVAL_QUERIES:
                 results = store.hybrid_search(
-                    query=query,
-                    top_k=5,
-                    memory_type=mtype,
-                    use_reranker=use_ce,
-                    use_mmr=True,
-                    query_aware=True,
-                    record_access=False,
+                    query=query, top_k=5, memory_type=mtype,
+                    use_reranker=use_ce, use_mmr=True, query_aware=True, record_access=False,
                 )
                 ranked_ids = [r["id"] for r in results]
                 if expected_id in ranked_ids:
@@ -226,207 +182,113 @@ def run_ir_benchmark(
                     if rank <= 3:
                         hits_at_3 += 1
 
-            n_pos = len(POSITIVE_EVAL_QUERIES)
             neg_rejected = 0
             for neg_q in NEGATIVE_EVAL_QUERIES:
                 plan = QueryAwareRouter.analyze(neg_q, cfg)
-                if not plan.needs_memory:
+                if not plan.needs_memory or not store.hybrid_search(query=neg_q, top_k=3, use_reranker=use_ce, record_access=False):
                     neg_rejected += 1
-                else:
-                    res = store.hybrid_search(
-                        query=neg_q,
-                        top_k=3,
-                        use_reranker=use_ce,
-                        record_access=False,
-                    )
-                    if not res:
-                        neg_rejected += 1
 
             report[mode_name] = {
                 "recall_at_1": round(hits_at_1 / n_pos, 4),
                 "recall_at_3": round(hits_at_3 / n_pos, 4),
                 "mrr": round(rr_sum / n_pos, 4),
-                "negative_rejection_rate": round(
-                    neg_rejected / len(NEGATIVE_EVAL_QUERIES), 4
-                ),
+                "negative_rejection_rate": round(neg_rejected / len(NEGATIVE_EVAL_QUERIES), 4),
             }
 
         # Verify pre-filtering when store has >50 items of another memory_type
         for i in range(55):
             store.add(
                 text=f"Synthetic distractor semantic fact number {i} about ROS 2 robotics.",
-                memory_type="semantic",
-                importance=0.99,
-                source="distractor",
-                duplicate_threshold=0.999,
+                memory_type="semantic", importance=0.99, source="distractor", duplicate_threshold=0.999,
             )
         filtered_hits = store.hybrid_search(
             query="What vector database error did I fix last week?",
-            top_k=3,
-            memory_type="episodic",
-            record_access=False,
+            top_k=3, memory_type="episodic", record_access=False,
         )
-        report["prefilter_over_50_distractors_ok"] = (
-            len(filtered_hits) >= 1 and filtered_hits[0]["id"] == 12
-        )
+        report["prefilter_over_50_distractors_ok"] = bool(filtered_hits and filtered_hits[0]["id"] == 12)
 
     return report
 
 
 def run_full_verification(run_llm_e2e: bool = True) -> Dict[str, Any]:
-    """Run deterministic unit checks for all capability tools, memory retrieval, and live LLM word-by-word streaming."""
+    """Run deterministic unit checks for capability tools, memory retrieval, and live LLM token streaming."""
     checks: Dict[str, Any] = {}
 
     # 1. Prompt newline verification (no literal "\\n")
     sample_sys = build_system_prompt('{"name":"execute_command"}')
-    checks["system_prompt_has_real_newlines"] = (
-        "\\n" not in sample_sys and "\n" in sample_sys
-    )
-    checks["memory_prompt_has_real_newlines"] = (
-        "\\n" not in MEMORY_SYSTEM_PROMPT and "\n" in MEMORY_SYSTEM_PROMPT
-    )
+    checks["system_prompt_has_real_newlines"] = "\\n" not in sample_sys and "\n" in sample_sys
+    checks["memory_prompt_has_real_newlines"] = "\\n" not in MEMORY_SYSTEM_PROMPT and "\n" in MEMORY_SYSTEM_PROMPT
 
     # 2. Safe AST Calculator DoS protection against 9**9**9**9
     t0 = time.perf_counter()
     dos_out = calculate("9**9**9**9")
-    elapsed_ms = (time.perf_counter() - t0) * 1000.0
-    checks["calculator_blocks_power_tower_dos"] = (
-        "error" in dos_out.lower() and elapsed_ms < 50.0
-    )
+    checks["calculator_blocks_power_tower_dos"] = "error" in dos_out.lower() and (time.perf_counter() - t0) * 1000.0 < 50.0
     checks["calculator_128_x_37"] = calculate("128 * 37") == "4736"
 
     # 3. Non-greedy JSON extraction on multiple JSON blocks
     multi_json = 'Here is the action:\n{"action":"final","response":"Hello Sparsh"}\n{"trailing":"ignored"}'
     parsed = extract_json_object(multi_json)
-    checks["non_greedy_json_extraction_ok"] = (
-        parsed is not None and parsed.get("response") == "Hello Sparsh"
-    )
+    checks["non_greedy_json_extraction_ok"] = parsed is not None and parsed.get("response") == "Hello Sparsh"
 
-    # 4. Question vs Declarative filtering for memory extraction (prevents assistant echo)
-    checks["question_skipped_by_extractor"] = not is_declarative_user_statement(
-        "What are my longer-term goals for JARVIS?"
-    )
-    checks["declarative_accepted_by_extractor"] = is_declarative_user_statement(
-        "My name is Sparsh Agarwal and I am building a ROS 2 robot."
-    )
+    # 4. Question vs Declarative filtering for memory extraction
+    checks["question_skipped_by_extractor"] = not is_declarative_user_statement("What are my longer-term goals for JARVIS?")
+    checks["declarative_accepted_by_extractor"] = is_declarative_user_statement("My name is Sparsh Agarwal and I am building a ROS 2 robot.")
 
     # 5. Dynamic Capability Tools + IR Benchmark + Singleton Supersede + Reset verification
     with tempfile.TemporaryDirectory(prefix="jarvis_verify_") as tmp_dir:
         tmp_path = Path(tmp_dir)
         cfg = MemoryConfig(base_dir=tmp_path / "mem", use_cross_encoder=True)
         store = FAISSMemoryStore(config=cfg)
-        id1 = store.add(
-            "The user's age is 20 years old.",
-            memory_type="semantic",
-            importance=0.9,
-        )
-        id2 = store.add(
-            "The user's age is 21 years old.",
-            memory_type="semantic",
-            importance=0.95,
-        )
-        checks["singleton_fact_supersedes_in_place"] = (
-            id1 == id2
-            and store.size == 1
-            and "21" in store.list_all()[0]["text"]
-        )
-        store.reset()
-        checks["reset_clears_ram_and_disk"] = (
-            store.size == 0 and not store.index_path.exists()
-        )
+        id1 = store.add("The user's age is 20 years old.", memory_type="semantic", importance=0.9)
+        id2 = store.add("The user's age is 21 years old.", memory_type="semantic", importance=0.95)
+        checks["singleton_fact_supersedes_in_place"] = id1 == id2 and store.size == 1 and "21" in store.list_all()[0]["text"]
 
-        checks["dynamic_capability_tools"] = _verify_dynamic_capability_tools(
-            store, tmp_path
-        )
         store.reset()
+        checks["reset_clears_ram_and_disk"] = store.size == 0 and not store.index_path.exists()
+        checks["dynamic_capability_tools"] = _verify_dynamic_capability_tools(store, tmp_path)
 
-        ir_metrics = run_ir_benchmark(
-            embedder=store.embedder,
-            reranker=store.reranker,
-            device=store.device,
-        )
-        checks["ir_benchmark"] = ir_metrics
+        store.reset()
+        checks["ir_benchmark"] = run_ir_benchmark(embedder=store.embedder, reranker=store.reranker, device=store.device)
 
         if run_llm_e2e:
-            app_cfg = JarvisConfig(
-                memory=MemoryConfig(base_dir=tmp_path / "e2e_mem")
-            )
+            app_cfg = JarvisConfig(memory=MemoryConfig(base_dir=tmp_path / "e2e_mem"))
             agent = JarvisAgent(
                 config=app_cfg,
-                memory_store=FAISSMemoryStore(
-                    config=app_cfg.memory,
-                    embedder=store.embedder,
-                    reranker=store.reranker,
-                    device=store.device,
-                ),
+                memory_store=FAISSMemoryStore(config=app_cfg.memory, embedder=store.embedder, reranker=store.reranker, device=store.device),
             )
             footprint_mb = agent.llm_engine.get_memory_footprint_mb()
             checks["llm_4bit_footprint_mb"] = round(footprint_mb, 1)
             checks["llm_4bit_quantization_applied"] = footprint_mb < 3500.0
 
             # Seed clean test facts
-            agent.memory_store.add(
-                "The user's name is Sparsh Agarwal and he is a robotics & AI programmer.",
-                memory_type="semantic",
-                importance=0.95,
-                source="test_seed",
-            )
-            agent.memory_store.add(
-                "The user's age is 20 years old.",
-                memory_type="semantic",
-                importance=0.99,
-                source="test_seed",
-            )
-            agent.memory_store.add(
-                "The user is building a personal AI assistant called JARVIS and wants to connect it to ROS 2 and robotics.",
-                memory_type="goal",
-                importance=0.95,
-                source="test_seed",
-            )
+            agent.memory_store.add("The user's name is Sparsh Agarwal and he is a robotics & AI programmer.", memory_type="semantic", importance=0.95, source="test_seed")
+            agent.memory_store.add("The user's age is 20 years old.", memory_type="semantic", importance=0.99, source="test_seed")
+            agent.memory_store.add("The user is building a personal AI assistant called JARVIS and wants to connect it to ROS 2 and robotics.", memory_type="goal", importance=0.95, source="test_seed")
 
             history: List[Dict[str, str]] = []
-            t_goals = agent.turn(
-                "What am I building, and what are my long-term robotics goals?",
-                history=history,
-            )
+            t_goals = agent.turn("What am I building, and what are my long-term robotics goals?", history=history)
             t_age = agent.turn("whatismyage?", history=history)
             t_calc = agent.turn("Calculate 128 * 37", history=history)
 
             checks["e2e_turn_goals_answer"] = t_goals["answer"]
-            checks["e2e_turn_goals_no_echo_memories"] = (
-                len(t_goals["new_memories"]) == 0
-            )
+            checks["e2e_turn_goals_no_echo_memories"] = len(t_goals["new_memories"]) == 0
             checks["e2e_turn_age_answer"] = t_age["answer"]
             checks["e2e_turn_age_correct"] = "20" in t_age["answer"]
             checks["e2e_turn_calc_answer"] = t_calc["answer"]
             checks["e2e_turn_calc_correct"] = "4736" in t_calc["answer"]
 
             # Verify Agent Word-by-Word Streaming (`stream_turn`) events, no JSON leak, and TTFT telemetry
-            stream_events = list(
-                agent.stream_turn(
-                    "What is my name and what am I building?", history=history
-                )
-            )
+            stream_events = list(agent.stream_turn("What is my name and what am I building?", history=history))
             event_types = [e.get("event") for e in stream_events]
-            token_texts = [
-                e.get("text", "")
-                for e in stream_events
-                if e.get("event") == "token"
-            ]
+            token_texts = [e.get("text", "") for e in stream_events if e.get("event") == "token"]
             streamed_answer = "".join(token_texts).strip()
-            final_ev = next(
-                (e for e in stream_events if e.get("event") == "final"), {}
-            )
+            final_ev = next((e for e in stream_events if e.get("event") == "final"), {})
 
             checks["streaming_events_valid"] = (
-                event_types[0] == "start"
-                and event_types[-1] == "done"
-                and "token" in event_types
-                and "final" in event_types
+                event_types[0] == "start" and event_types[-1] == "done"
+                and "token" in event_types and "final" in event_types
             )
-            checks["streaming_no_json_leak"] = not streamed_answer.startswith(
-                "{"
-            )
+            checks["streaming_no_json_leak"] = not streamed_answer.startswith("{")
             checks["streaming_answer"] = streamed_answer
             checks["streaming_metrics"] = final_ev.get("metrics", {})
             checks["kv_cache_stats"] = agent.llm_engine.kv_manager.stats()

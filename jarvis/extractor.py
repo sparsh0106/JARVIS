@@ -1,4 +1,4 @@
-"""Robust JSON extraction and User-Only Durable Memory Extractor (no assistant laundering)."""
+"""Robust JSON parsing and User-Only Durable Memory Extractor (no assistant laundering)."""
 
 from __future__ import annotations
 
@@ -26,7 +26,6 @@ MEMORY_SYSTEM_PROMPT = (
     "5. Output valid JSON only."
 )
 
-# Fast-path filter: pure questions without declarative user statements should never trigger memory extraction
 _DECLARATIVE_USER_CUES = re.compile(
     r"\b(?:i\s+am|i'm|im|my\s+\w+\s+is|i\s+want|i\s+like|i\s+prefer|i\s+love|i\s+hate|"
     r"i\s+work|i\s+study|i\s+build|i'm\s+building|i\s+plan|i\s+need\s+to|my\s+goal|"
@@ -36,61 +35,40 @@ _DECLARATIVE_USER_CUES = re.compile(
 
 
 def _repair_common_json_typos(text: str) -> str:
-    """Repair common small-model JSON typos such as stray quotes before closing braces (`}]"}` -> `}]}`)."""
+    """Repair common small-model JSON typos such as stray quotes before closing braces."""
     repaired = re.sub(r'\]\s*"\s*\}', "]}", text)
     return re.sub(r'\}\s*"\s*\]', "}]", repaired)
 
 
-def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
-    """Parse the first valid JSON object from `text` using `json.JSONDecoder().raw_decode`."""
+def extract_all_json_objects(text: str) -> List[Dict[str, Any]]:
+    """Extract all top-level JSON objects from text in order using `raw_decode`."""
     if not text:
-        return None
-    cleaned = text.strip()
+        return []
 
+    cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.I)
         cleaned = re.sub(r"\s*```$", "", cleaned).strip()
 
     cleaned = _repair_common_json_typos(cleaned)
 
+    # Fast path: entire string is valid JSON
     try:
         parsed = json.loads(cleaned)
         if isinstance(parsed, dict):
-            return parsed
+            return [parsed]
     except json.JSONDecodeError:
         pass
 
     decoder = json.JSONDecoder()
+    found: List[Dict[str, Any]] = []
     idx = 0
     while idx < len(cleaned):
         brace_pos = cleaned.find("{", idx)
         if brace_pos == -1:
             break
         try:
-            obj, _ = decoder.raw_decode(cleaned, brace_pos)
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            pass
-        idx = brace_pos + 1
-
-    return None
-
-
-def extract_all_json_objects(text: str) -> List[Dict[str, Any]]:
-    """Extract all top-level or nested JSON dictionary objects from `text`."""
-    if not text:
-        return []
-    candidate = _repair_common_json_typos(text.strip())
-    decoder = json.JSONDecoder()
-    found: List[Dict[str, Any]] = []
-    idx = 0
-    while idx < len(candidate):
-        brace_pos = candidate.find("{", idx)
-        if brace_pos == -1:
-            break
-        try:
-            obj, end_pos = decoder.raw_decode(candidate, brace_pos)
+            obj, end_pos = decoder.raw_decode(cleaned, brace_pos)
             if isinstance(obj, dict):
                 found.append(obj)
                 idx = end_pos
@@ -98,7 +76,14 @@ def extract_all_json_objects(text: str) -> List[Dict[str, Any]]:
         except json.JSONDecodeError:
             pass
         idx = brace_pos + 1
+
     return found
+
+
+def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+    """Parse the first valid JSON object from `text` non-greedily."""
+    objs = extract_all_json_objects(text)
+    return objs[0] if objs else None
 
 
 def is_declarative_user_statement(user_text: str) -> bool:
@@ -111,10 +96,7 @@ def extract_memories_from_user_turn(
     user_text: str,
     llm_engine: LocalLLMEngine,
 ) -> List[Dict[str, Any]]:
-    """
-    Extract durable user-specific memories strictly from `user_text`.
-    Never passes `assistant_text` to the extractor, eliminating echo/laundering of assistant guesses.
-    """
+    """Extract durable user-specific memories strictly from `user_text` (never from assistant replies)."""
     if not is_declarative_user_statement(user_text):
         return []
 
@@ -131,51 +113,39 @@ def extract_memories_from_user_turn(
         max_new_tokens=240,
         temperature=0.0,
         do_sample=False,
-        use_kv_cache=False,
     )
 
     parsed = extract_json_object(raw)
     if not parsed:
         return []
 
-    memories: List[Any] = []
-    if isinstance(parsed.get("memories"), list):
-        memories = parsed["memories"]
-    elif "text" in parsed:
-        memories = [
-            obj for obj in extract_all_json_objects(raw) if "text" in obj
-        ]
+    memories: List[Any] = (
+        parsed["memories"]
+        if isinstance(parsed.get("memories"), list)
+        else [obj for obj in extract_all_json_objects(raw) if "text" in obj]
+    )
 
     validated: List[Dict[str, Any]] = []
     for item in memories:
         if not isinstance(item, dict):
             continue
-        text = item.get("text")
+        text = str(item.get("text", "")).strip()
+        if not text or re.match(r"^(?:your\s+|you\s+could\s+|you\s+should\s+|let\s+me\s+know)", text, re.I):
+            continue
+
         memory_type = item.get("memory_type")
-        importance = item.get("importance", 0.75)
-
-        if not isinstance(text, str) or not text.strip():
-            continue
-        text = text.strip()
-
-        # Reject second-person phrasing that looks like assistant advice
-        if re.match(r"^(?:your\s+|you\s+could\s+|you\s+should\s+|let\s+me\s+know)", text, re.I):
-            continue
-
         if memory_type not in VALID_MEMORY_TYPES:
             memory_type = "semantic"
 
         try:
-            imp_val = max(0.0, min(1.0, float(importance)))
+            importance = max(0.0, min(1.0, float(item.get("importance", 0.75))))
         except (TypeError, ValueError):
-            imp_val = 0.75
+            importance = 0.75
 
-        validated.append(
-            {
-                "text": text,
-                "memory_type": memory_type,
-                "importance": imp_val,
-            }
-        )
+        validated.append({
+            "text": text,
+            "memory_type": memory_type,
+            "importance": importance,
+        })
 
     return validated
