@@ -23,7 +23,10 @@ MEMORY_SYSTEM_PROMPT = (
     "2. Extract ONLY facts, goals, preferences, projects, or personal details explicitly stated by the USER.\n"
     "3. Write each memory as a concise third-person statement starting with 'The user ...'.\n"
     "4. If the USER is only asking a question, greeting, or issuing a utility command, return {\"memories\":[]}.\n"
-    "5. Output valid JSON only."
+    "5. Do NOT include any assistant-generated text or inferred information; extract only what the USER explicitly states.\n"
+    "6. Assign an importance score between 0.0 and 1.0 for each memory, reflecting its significance to the USER's identity or goals.\n"
+    "7. If the USER provides multiple facts in one statement, extract each fact as a separate memory object.\n"
+    "8. Output valid JSON only."
 )
 
 _DECLARATIVE_USER_CUES = re.compile(
