@@ -140,7 +140,9 @@ class FAISSMemoryStore:
             raw = json.loads(self.metadata_path.read_text(encoding="utf-8"))
             self.metadata = {str(k): v for k, v in raw.items()}
             self.next_id = max(int(k) for k in self.metadata) + 1 if self.metadata else 1
-            if self.index.ntotal != len(self.metadata):
+            index_ids = set(self.index.vectors.keys()) if hasattr(self.index, "vectors") else None
+            meta_ids = set(int(k) for k in self.metadata)
+            if self.index.ntotal != len(self.metadata) or (index_ids is not None and index_ids != meta_ids):
                 self._rebuild_index_from_metadata()
             else:
                 self._rebuild_tfidf()
@@ -244,7 +246,9 @@ class FAISSMemoryStore:
             raise ValueError("Memory text cannot be empty.")
 
         mtype = memory_type if memory_type in VALID_MEMORY_TYPES else "semantic"
-        imp = float(np.clip(importance, 0.0, 1.0))
+        if not math.isfinite(float(importance)):
+            raise ValueError(f"Importance must be a finite number: {importance}")
+        imp = float(np.clip(float(importance), 0.0, 1.0))
         dup_thresh = self.config.duplicate_threshold if duplicate_threshold is None else duplicate_threshold
 
         target_id = supersede_id or self._find_singleton_conflict(text, mtype)
@@ -313,7 +317,9 @@ class FAISSMemoryStore:
         if memory_type is not None and memory_type in VALID_MEMORY_TYPES:
             item["memory_type"] = memory_type
         if importance is not None:
-            item["importance"] = float(np.clip(importance, 0.0, 1.0))
+            if not math.isfinite(float(importance)):
+                raise ValueError(f"Importance must be a finite number: {importance}")
+            item["importance"] = float(np.clip(float(importance), 0.0, 1.0))
         if source is not None:
             item["source"] = source
 

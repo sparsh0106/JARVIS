@@ -79,3 +79,16 @@ Thumbs.db
 # Logs and screenshots
 *.log
 screenshot*.png
+
+# Benchmark results and execution artifacts (do not track raw outputs)
+benchmarks/**/results/
+benchmarks/results/
+benchmarks/**/workspace*/
+benchmarks/**/agent_workspaces/
+*.jsonl
+outputs/
+BENCHMARK_REPORT.md
+*dashboard.html
+finalization_summary.json
+finalization_report.md
+source_manifest.json
